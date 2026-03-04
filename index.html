@@ -1,0 +1,790 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TaskFlow — Todo App</title>
+<link rel="manifest" href="./manifest.json">
+<meta name="theme-color" content="#a78bfa">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="TaskFlow">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --glass: rgba(255,255,255,0.08);
+    --glass-border: rgba(255,255,255,0.15);
+    --glass-hover: rgba(255,255,255,0.13);
+    --accent: #a78bfa;
+    --accent2: #38bdf8;
+    --accent3: #f472b6;
+    --danger: #f87171;
+    --text: #f1f5f9;
+    --text-muted: rgba(241,245,249,0.5);
+    --shadow: 0 8px 32px rgba(0,0,0,0.35);
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    font-family:'DM Sans',sans-serif;
+    min-height:100vh; background:#0a0a1a; color:var(--text); overflow-x:hidden;
+  }
+  .bg {
+    position:fixed; inset:0; z-index:0;
+    background:radial-gradient(ellipse at 20% 20%,#1e1040 0%,transparent 60%),
+               radial-gradient(ellipse at 80% 80%,#0c1a3a 0%,transparent 60%),
+               radial-gradient(ellipse at 50% 50%,#0f0828 0%,transparent 80%),#070714;
+  }
+  .bg::before {
+    content:''; position:absolute; inset:0;
+    background:radial-gradient(circle at 15% 35%,rgba(167,139,250,.15) 0%,transparent 40%),
+               radial-gradient(circle at 85% 65%,rgba(56,189,248,.12) 0%,transparent 40%),
+               radial-gradient(circle at 50% 10%,rgba(244,114,182,.1) 0%,transparent 35%);
+    animation:bgShift 10s ease-in-out infinite alternate;
+  }
+  @keyframes bgShift { 0%{opacity:.7;transform:scale(1)} 100%{opacity:1;transform:scale(1.05)} }
+
+  .container { position:relative; z-index:1; max-width:860px; margin:0 auto; padding:40px 20px 80px; }
+
+  /* ── Notification banner ── */
+  .notif-banner {
+    background:linear-gradient(135deg,rgba(167,139,250,.15),rgba(56,189,248,.1));
+    border:1px solid rgba(167,139,250,.3);
+    border-radius:16px; padding:14px 18px;
+    display:flex; align-items:center; gap:14px;
+    margin-bottom:20px; animation:fadeDown .5s ease both;
+  }
+  .notif-banner.hidden { display:none; }
+  .notif-icon { font-size:1.6rem; }
+  .notif-text { flex:1; }
+  .notif-text strong { display:block; font-family:'Syne',sans-serif; font-size:.95rem; margin-bottom:2px; }
+  .notif-text span { font-size:.82rem; color:var(--text-muted); }
+  .btn-allow {
+    background:linear-gradient(135deg,var(--accent),#7c3aed);
+    border:none; border-radius:10px; color:#fff;
+    cursor:pointer; font-family:'Syne',sans-serif; font-weight:600;
+    padding:9px 18px; font-size:.85rem; white-space:nowrap;
+    transition:all .2s;
+  }
+  .btn-allow:hover { transform:translateY(-1px); box-shadow:0 4px 16px rgba(167,139,250,.4); }
+  .btn-dismiss {
+    background:none; border:none; color:var(--text-muted);
+    cursor:pointer; font-size:1.2rem; padding:4px; transition:color .2s;
+  }
+  .btn-dismiss:hover { color:var(--text); }
+
+  /* ── Install banner ── */
+  .install-banner {
+    background:linear-gradient(135deg,rgba(56,189,248,.12),rgba(74,222,128,.08));
+    border:1px solid rgba(56,189,248,.25);
+    border-radius:16px; padding:14px 18px;
+    display:flex; align-items:center; gap:14px;
+    margin-bottom:20px; animation:fadeDown .5s .05s ease both;
+  }
+  .install-banner.hidden { display:none; }
+
+  header {
+    display:flex; align-items:center; justify-content:space-between;
+    margin-bottom:28px; animation:fadeDown .6s ease both; gap:12px; flex-wrap:wrap;
+  }
+  .header-right { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  .btn-install {
+    background:linear-gradient(135deg, rgba(56,189,248,.25), rgba(74,222,128,.15));
+    border:1px solid rgba(56,189,248,.4);
+    border-radius:12px; color:var(--accent2);
+    cursor:pointer; font-family:'Syne',sans-serif; font-weight:700;
+    padding:8px 16px; font-size:.82rem; white-space:nowrap;
+    transition:all .2s; display:flex; align-items:center; gap:6px;
+    animation: pulse-install 2s ease-in-out infinite;
+  }
+  .btn-install:hover { transform:translateY(-2px); box-shadow:0 4px 16px rgba(56,189,248,.3); }
+  .btn-install.hidden { display:none; }
+  @keyframes pulse-install {
+    0%,100% { box-shadow: 0 0 0 0 rgba(56,189,248,.3); }
+    50% { box-shadow: 0 0 0 6px rgba(56,189,248,.0); }
+  }
+  .logo {
+    font-family:'Syne',sans-serif; font-size:2rem; font-weight:800;
+    background:linear-gradient(135deg,var(--accent),var(--accent2));
+    -webkit-background-clip:text; -webkit-text-fill-color:transparent; letter-spacing:-1px;
+  }
+  .stats { display:flex; gap:16px; }
+  .stat-chip {
+    background:var(--glass); border:1px solid var(--glass-border);
+    border-radius:20px; padding:6px 14px; font-size:.8rem;
+    color:var(--text-muted); backdrop-filter:blur(10px);
+  }
+  .stat-chip span { color:var(--accent); font-weight:600; }
+
+  .glass {
+    background:var(--glass); border:1px solid var(--glass-border);
+    border-radius:20px; backdrop-filter:blur(20px); box-shadow:var(--shadow);
+  }
+
+  .add-form { padding:24px; margin-bottom:24px; animation:fadeDown .6s .1s ease both; }
+  .form-row { display:flex; gap:10px; margin-bottom:12px; }
+  .form-row:last-child { margin-bottom:0; }
+
+  input,select,textarea {
+    background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.1);
+    border-radius:12px; color:var(--text); font-family:'DM Sans',sans-serif;
+    font-size:.95rem; padding:12px 16px; outline:none; transition:all .2s; width:100%;
+  }
+  input::placeholder,textarea::placeholder { color:var(--text-muted); }
+  input:focus,select:focus,textarea:focus {
+    border-color:var(--accent); box-shadow:0 0 0 3px rgba(167,139,250,.15);
+    background:rgba(255,255,255,.09);
+  }
+  select option { background:#1a1030; color:var(--text); }
+
+  .btn {
+    border:none; border-radius:12px; cursor:pointer;
+    font-family:'Syne',sans-serif; font-weight:600;
+    padding:12px 24px; font-size:.9rem; transition:all .2s; white-space:nowrap;
+  }
+  .btn-primary {
+    background:linear-gradient(135deg,var(--accent),#7c3aed); color:#fff;
+    box-shadow:0 4px 20px rgba(167,139,250,.35);
+  }
+  .btn-primary:hover { transform:translateY(-2px); box-shadow:0 6px 28px rgba(167,139,250,.5); }
+  .btn-primary:active { transform:translateY(0); }
+
+  .filters {
+    display:flex; gap:10px; margin-bottom:20px; flex-wrap:wrap;
+    animation:fadeDown .6s .2s ease both;
+  }
+  .filter-btn {
+    background:var(--glass); border:1px solid var(--glass-border);
+    border-radius:20px; color:var(--text-muted); cursor:pointer;
+    font-family:'DM Sans',sans-serif; font-size:.85rem; padding:7px 16px;
+    transition:all .2s; backdrop-filter:blur(10px);
+  }
+  .filter-btn:hover { color:var(--text); border-color:rgba(255,255,255,.3); }
+  .filter-btn.active {
+    background:linear-gradient(135deg,rgba(167,139,250,.25),rgba(56,189,248,.15));
+    border-color:var(--accent); color:var(--accent); font-weight:500;
+  }
+  .search-wrap { margin-left:auto; position:relative; }
+  .search-wrap input { width:180px; padding:7px 16px 7px 34px; }
+  .search-icon { position:absolute; left:12px; top:50%; transform:translateY(-50%); color:var(--text-muted); font-size:.9rem; pointer-events:none; }
+
+  .tasks-section { animation:fadeDown .6s .3s ease both; }
+  .section-header {
+    display:flex; align-items:center; gap:10px; margin-bottom:14px;
+    font-family:'Syne',sans-serif; font-size:.85rem; font-weight:700;
+    text-transform:uppercase; letter-spacing:1.5px; color:var(--text-muted);
+  }
+  .section-header::after { content:''; flex:1; height:1px; background:linear-gradient(to right,rgba(255,255,255,.1),transparent); }
+
+  .task-item {
+    background:var(--glass); border:1px solid var(--glass-border);
+    border-radius:16px; backdrop-filter:blur(16px); margin-bottom:10px;
+    padding:16px 18px; display:flex; align-items:flex-start; gap:14px;
+    transition:all .25s; cursor:grab; animation:taskIn .3s ease both;
+    position:relative; overflow:hidden;
+  }
+  .task-item::before {
+    content:''; position:absolute; left:0; top:0; bottom:0;
+    width:3px; border-radius:3px 0 0 3px;
+  }
+  .task-item.priority-high::before { background:var(--danger); }
+  .task-item.priority-medium::before { background:#fb923c; }
+  .task-item.priority-low::before { background:#4ade80; }
+  .task-item:hover {
+    border-color:rgba(255,255,255,.25); background:var(--glass-hover);
+    transform:translateY(-2px); box-shadow:0 12px 40px rgba(0,0,0,.4);
+  }
+  .task-item.dragging { opacity:.5; cursor:grabbing; transform:scale(.98); }
+  .task-item.drag-over { border-color:var(--accent); box-shadow:0 0 0 2px rgba(167,139,250,.3); }
+  .task-item.done { opacity:.5; }
+  .task-item.done .task-title { text-decoration:line-through; color:var(--text-muted); }
+  @keyframes taskIn { from{opacity:0;transform:translateY(10px)} to{opacity:1;transform:translateY(0)} }
+
+  .checkbox {
+    width:22px; height:22px; min-width:22px; border:2px solid rgba(255,255,255,.2);
+    border-radius:7px; cursor:pointer; display:flex; align-items:center;
+    justify-content:center; transition:all .2s; margin-top:2px;
+  }
+  .checkbox:hover { border-color:var(--accent); }
+  .checkbox.checked { background:linear-gradient(135deg,var(--accent),#7c3aed); border-color:transparent; }
+  .checkbox.checked::after { content:'✓'; color:white; font-size:13px; font-weight:700; }
+
+  .task-content { flex:1; min-width:0; }
+  .task-title { font-size:.95rem; font-weight:500; margin-bottom:6px; line-height:1.4; word-break:break-word; }
+  .task-meta { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+
+  .tag { border-radius:20px; font-size:.73rem; font-weight:500; padding:3px 10px; }
+  .priority-badge { font-size:.72rem; font-weight:600; padding:3px 9px; border-radius:20px; text-transform:uppercase; letter-spacing:.5px; }
+  .priority-badge.high { background:rgba(248,113,113,.2); color:var(--danger); }
+  .priority-badge.medium { background:rgba(251,146,60,.2); color:#fb923c; }
+  .priority-badge.low { background:rgba(74,222,128,.2); color:#4ade80; }
+
+  .deadline { font-size:.78rem; color:var(--text-muted); display:flex; align-items:center; gap:4px; }
+  .deadline.overdue { color:var(--danger); }
+  .deadline.soon { color:#fb923c; }
+
+  .task-actions { display:flex; gap:6px; align-items:center; opacity:0; transition:opacity .2s; }
+  .task-item:hover .task-actions { opacity:1; }
+  .action-btn {
+    background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.1);
+    border-radius:8px; color:var(--text-muted); cursor:pointer;
+    font-size:.85rem; padding:5px 8px; transition:all .2s;
+  }
+  .action-btn:hover { background:rgba(255,255,255,.15); color:var(--text); }
+  .action-btn.delete:hover { background:rgba(248,113,113,.2); color:var(--danger); border-color:rgba(248,113,113,.3); }
+
+  .empty { text-align:center; padding:60px 20px; color:var(--text-muted); }
+  .empty-icon { font-size:3rem; margin-bottom:12px; opacity:.5; }
+  .empty p { font-size:.95rem; }
+
+  .modal-overlay {
+    position:fixed; inset:0; z-index:100;
+    background:rgba(0,0,0,.7); backdrop-filter:blur(6px);
+    display:flex; align-items:center; justify-content:center; padding:20px;
+    opacity:0; pointer-events:none; transition:opacity .25s;
+  }
+  .modal-overlay.open { opacity:1; pointer-events:all; }
+  .modal {
+    background:rgba(15,10,40,.95); border:1px solid var(--glass-border);
+    border-radius:24px; padding:32px; width:100%; max-width:480px;
+    box-shadow:0 24px 80px rgba(0,0,0,.6);
+    transform:scale(.95) translateY(10px); transition:transform .25s;
+  }
+  .modal-overlay.open .modal { transform:scale(1) translateY(0); }
+  .modal h2 {
+    font-family:'Syne',sans-serif; font-size:1.3rem; font-weight:700; margin-bottom:20px;
+    background:linear-gradient(135deg,var(--accent),var(--accent2));
+    -webkit-background-clip:text; -webkit-text-fill-color:transparent;
+  }
+  .modal-actions { display:flex; gap:10px; margin-top:20px; }
+  .btn-ghost {
+    background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.12);
+    color:var(--text-muted); flex:1;
+  }
+  .btn-ghost:hover { background:rgba(255,255,255,.1); color:var(--text); }
+  .btn-primary { flex:2; }
+
+  .tag-work    { background:rgba(56,189,248,.15);  color:var(--accent2); border:1px solid rgba(56,189,248,.25); }
+  .tag-personal{ background:rgba(244,114,182,.15); color:var(--accent3); border:1px solid rgba(244,114,182,.25); }
+  .tag-health  { background:rgba(74,222,128,.15);  color:#4ade80; border:1px solid rgba(74,222,128,.25); }
+  .tag-finance { background:rgba(251,191,36,.15);  color:#fbbf24; border:1px solid rgba(251,191,36,.25); }
+  .tag-study   { background:rgba(167,139,250,.15); color:var(--accent); border:1px solid rgba(167,139,250,.25); }
+  .tag-other   { background:rgba(255,255,255,.08); color:var(--text-muted); border:1px solid rgba(255,255,255,.12); }
+
+  .progress-wrap { margin-bottom:24px; animation:fadeDown .6s .15s ease both; }
+  .progress-bar-bg { background:rgba(255,255,255,.06); border-radius:20px; height:6px; overflow:hidden; margin-top:8px; }
+  .progress-bar-fill {
+    height:100%; background:linear-gradient(90deg,var(--accent),var(--accent2));
+    border-radius:20px; transition:width .5s ease; box-shadow:0 0 12px rgba(167,139,250,.5);
+  }
+  .progress-label { display:flex; justify-content:space-between; font-size:.8rem; color:var(--text-muted); }
+  .progress-label span:first-child { font-family:'Syne',sans-serif; font-weight:600; color:var(--text); }
+
+  .drag-handle {
+    color:var(--text-muted); cursor:grab; font-size:1rem;
+    padding:2px 4px; margin-top:2px; opacity:.4; transition:opacity .2s; line-height:1;
+  }
+  .task-item:hover .drag-handle { opacity:.8; }
+
+  /* SW status */
+  .sw-status {
+    font-size:.75rem; padding:8px 14px; border-radius:10px; margin-bottom:16px;
+    display:flex; align-items:center; gap:8px;
+    animation:fadeDown .5s ease both;
+  }
+  .sw-status.ok { background:rgba(74,222,128,.1); border:1px solid rgba(74,222,128,.2); color:#4ade80; }
+  .sw-status.warn { background:rgba(251,191,36,.1); border:1px solid rgba(251,191,36,.2); color:#fbbf24; }
+  .sw-status.hidden { display:none; }
+  .notif-chips { display:flex; gap:4px; flex-wrap:wrap; margin-top:4px; }
+  .notif-chip {
+    font-size:.68rem; padding:2px 7px; border-radius:20px;
+    background:rgba(167,139,250,.12); color:rgba(167,139,250,.8);
+    border:1px solid rgba(167,139,250,.2);
+  }
+
+  @keyframes fadeDown { from{opacity:0;transform:translateY(-16px)} to{opacity:1;transform:translateY(0)} }
+</style>
+</head>
+<body>
+<div class="bg"></div>
+<div class="container">
+
+  <!-- Notification permission banner -->
+  <div class="notif-banner hidden" id="notif-banner">
+    <div class="notif-icon">🔔</div>
+    <div class="notif-text">
+      <strong>Увімкни нагадування</strong>
+      <span>Отримуй сповіщення за 24год, 1год та 5хв до дедлайну</span>
+    </div>
+    <button class="btn-allow" onclick="requestNotifPermission()">Дозволити</button>
+    <button class="btn-dismiss" onclick="document.getElementById('notif-banner').classList.add('hidden')">✕</button>
+  </div>
+
+  <!-- Install PWA banner -->
+  <div class="install-banner hidden" id="install-banner">
+    <div class="notif-icon">📲</div>
+    <div class="notif-text">
+      <strong>Встанови як додаток</strong>
+      <span>Відкривай TaskFlow як окремий застосунок без браузера</span>
+    </div>
+    <button class="btn-allow" onclick="installPWA()">Встановити</button>
+    <button class="btn-dismiss" onclick="document.getElementById('install-banner').classList.add('hidden')">✕</button>
+  </div>
+
+  <header>
+    <div class="logo">TaskFlow</div>
+    <div class="header-right">
+      <button class="btn-install hidden" id="btn-install-header" onclick="installPWA()">
+        📲 Встановити додаток
+      </button>
+      <div class="stats">
+        <div class="stat-chip">Всього: <span id="stat-total">0</span></div>
+        <div class="stat-chip">Виконано: <span id="stat-done">0</span></div>
+      </div>
+    </div>
+  </header>
+
+  <div class="sw-status hidden" id="sw-status"></div>
+
+  <div class="glass add-form">
+    <div class="form-row">
+      <input type="text" id="task-input" placeholder="Додати нову задачу..." />
+      <button class="btn btn-primary" onclick="openModal()">+ Додати</button>
+    </div>
+  </div>
+
+  <div class="progress-wrap glass" style="padding:16px 20px;">
+    <div class="progress-label">
+      <span>Прогрес сьогодні</span>
+      <span id="progress-text">0 / 0 задач</span>
+    </div>
+    <div class="progress-bar-bg">
+      <div class="progress-bar-fill" id="progress-fill" style="width:0%"></div>
+    </div>
+  </div>
+
+  <div class="filters">
+    <button class="filter-btn active" onclick="setFilter('all',this)">Всі</button>
+    <button class="filter-btn" onclick="setFilter('active',this)">Активні</button>
+    <button class="filter-btn" onclick="setFilter('done',this)">Виконані</button>
+    <button class="filter-btn" onclick="setFilter('high',this)">🔴 Важливі</button>
+    <button class="filter-btn" onclick="setFilter('overdue',this)">⏰ Прострочені</button>
+    <div class="search-wrap">
+      <span class="search-icon">🔍</span>
+      <input type="text" id="search-input" placeholder="Пошук..." oninput="renderTasks()">
+    </div>
+  </div>
+
+  <div class="tasks-section">
+    <div class="section-header">Задачі</div>
+    <div id="task-list"></div>
+  </div>
+</div>
+
+<!-- Modal -->
+<div class="modal-overlay" id="modal">
+  <div class="modal">
+    <h2 id="modal-title">Нова задача</h2>
+    <div style="display:flex;flex-direction:column;gap:12px;">
+      <input type="text" id="m-title" placeholder="Назва задачі *" />
+      <div style="display:flex;gap:10px;">
+        <select id="m-priority" style="flex:1;">
+          <option value="low">🟢 Низький пріоритет</option>
+          <option value="medium" selected>🟠 Середній пріоритет</option>
+          <option value="high">🔴 Високий пріоритет</option>
+        </select>
+        <select id="m-tag" style="flex:1;">
+          <option value="work">💼 Робота</option>
+          <option value="personal">🏠 Особисте</option>
+          <option value="health">💪 Здоров'я</option>
+          <option value="finance">💰 Фінанси</option>
+          <option value="study">📚 Навчання</option>
+          <option value="other">📌 Інше</option>
+        </select>
+      </div>
+      <div style="display:flex;gap:10px;">
+        <input type="date" id="m-deadline" style="flex:1.4;" />
+        <input type="time" id="m-time" style="flex:1;" />
+      </div>
+      <div id="notif-preview" style="display:none;padding:10px 14px;background:rgba(167,139,250,.08);border:1px solid rgba(167,139,250,.2);border-radius:10px;font-size:.8rem;color:var(--text-muted);">
+        🔔 Нагадування будуть надіслані: <span id="notif-times"></span>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeModal()">Скасувати</button>
+      <button class="btn btn-primary" onclick="saveTask()">Зберегти задачу</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── State ─────────────────────────────────────────────────────────────────────
+let tasks = JSON.parse(localStorage.getItem('taskflow-tasks') || '[]');
+let currentFilter = 'all';
+let editId = null;
+let dragSrcId = null;
+let deferredInstallPrompt = null;
+
+const tagLabels = { work:'Робота', personal:'Особисте', health:"Здоров'я", finance:'Фінанси', study:'Навчання', other:'Інше' };
+const tagIcons  = { work:'💼', personal:'🏠', health:'💪', finance:'💰', study:'📚', other:'📌' };
+
+// ── Persist ───────────────────────────────────────────────────────────────────
+function save() {
+  localStorage.setItem('taskflow-tasks', JSON.stringify(tasks));
+  syncTasksToIDB(tasks); // keep SW in sync
+  scheduleBrowserAlarms(); // reset timers
+}
+
+// ── IndexedDB sync (for Service Worker) ──────────────────────────────────────
+function openIDB() {
+  return new Promise((res, rej) => {
+    const req = indexedDB.open('taskflow-sw', 1);
+    req.onupgradeneeded = e => e.target.result.createObjectStore('kv');
+    req.onsuccess = e => res(e.target.result);
+    req.onerror = rej;
+  });
+}
+async function syncTasksToIDB(tasks) {
+  // Sync via IDB for SW background access
+  try {
+    const db = await openIDB();
+    const tx = db.transaction('kv', 'readwrite');
+    tx.objectStore('kv').put(tasks, 'tasks');
+  } catch(e) { console.warn('IDB sync failed', e); }
+  // Also notify active SW directly
+  if (navigator.serviceWorker?.controller) {
+    navigator.serviceWorker.controller.postMessage({ type: 'TASKS_UPDATED', tasks });
+  }
+}
+
+// ── Service Worker registration ───────────────────────────────────────────────
+function showSwStatus(msg, type) {
+  const el = document.getElementById('sw-status');
+  el.textContent = msg; el.className = `sw-status ${type}`;
+  if (type === 'ok') setTimeout(() => el.classList.add('hidden'), 6000);
+}
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('./sw.js').then(reg => {
+    console.log('✅ SW registered:', reg.scope);
+    showSwStatus('✅ Service Worker активний — нагадування у фоні працюють', 'ok');
+    if ('periodicSync' in reg) {
+      navigator.permissions.query({ name: 'periodic-background-sync' })
+        .then(s => { if (s.state === 'granted') reg.periodicSync.register('check-tasks', { minInterval: 60000 }); })
+        .catch(() => {});
+    }
+  }).catch(e => {
+    console.warn('SW error:', e);
+    showSwStatus('⚠️ Service Worker не зареєстровано: ' + e.message, 'warn');
+  });
+} else {
+  showSwStatus('⚠️ Цей браузер не підтримує Service Worker', 'warn');
+}
+
+// ── PWA install prompt ────────────────────────────────────────────────────────
+window.addEventListener('beforeinstallprompt', e => {
+  e.preventDefault();
+  deferredInstallPrompt = e;
+  document.getElementById('install-banner').classList.remove('hidden');
+  document.getElementById('btn-install-header').classList.remove('hidden');
+});
+function installPWA() {
+  if (!deferredInstallPrompt) {
+    // Fallback: show manual instruction
+    alert('Щоб встановити:\n1. Натисни меню ⋮ у Chrome\n2. Вибери "Додати на головний екран"\n3. Натисни "Встановити"');
+    return;
+  }
+  deferredInstallPrompt.prompt();
+  deferredInstallPrompt.userChoice.then(choice => {
+    deferredInstallPrompt = null;
+    document.getElementById('install-banner').classList.add('hidden');
+    document.getElementById('btn-install-header').classList.add('hidden');
+  });
+}
+window.addEventListener('appinstalled', () => {
+  document.getElementById('install-banner').classList.add('hidden');
+  document.getElementById('btn-install-header').classList.add('hidden');
+});
+
+// ── Notification permission ───────────────────────────────────────────────────
+function checkNotifBanner() {
+  if (!('Notification' in window)) return;
+  if (Notification.permission === 'default') {
+    document.getElementById('notif-banner').classList.remove('hidden');
+  }
+}
+async function requestNotifPermission() {
+  const perm = await Notification.requestPermission();
+  document.getElementById('notif-banner').classList.add('hidden');
+  if (perm === 'granted') {
+    scheduleBrowserAlarms();
+    new Notification('TaskFlow ✅', { body: 'Нагадування увімкнені! Не пропустиш жодного дедлайну.', icon: './icons/icon-192.png' });
+  }
+}
+
+// ── Browser-side alarms (setTimeout) – work while tab is open ────────────────
+let alarmTimers = [];
+function scheduleBrowserAlarms() {
+  alarmTimers.forEach(clearTimeout);
+  alarmTimers = [];
+  if (Notification.permission !== 'granted') return;
+
+  const now = Date.now();
+  const reminders = [
+    { offsetMin: 1440, label: '24 години', emoji: '📅' },
+    { offsetMin: 60,   label: '1 годину',  emoji: '⏰' },
+    { offsetMin: 5,    label: '5 хвилин',  emoji: '🚨' },
+  ];
+
+  tasks.forEach(task => {
+    if (!task.deadline || task.done) return;
+    const timeStr = task.time || '23:59';
+    const deadlineMs = new Date(`${task.deadline}T${timeStr}`).getTime();
+    if (deadlineMs < now) return;
+
+    reminders.forEach(r => {
+      const fireAt = deadlineMs - r.offsetMin * 60000;
+      const delay = fireAt - now;
+      if (delay > 0 && delay < 7 * 24 * 3600000) { // max 7 days ahead
+        const key = `fired_${task.id}_${r.offsetMin}`;
+        if (!sessionStorage.getItem(key)) {
+          const t = setTimeout(() => {
+            if (!task.done) {
+              navigator.serviceWorker.ready.then(reg => {
+                reg.showNotification(`${r.emoji} TaskFlow: «${task.title}»`, {
+                  body: `До дедлайну залишилось ${r.label}!\n${formatDateTime(task.deadline, task.time)}`,
+                  icon: './icons/icon-192.png',
+                  badge: './icons/icon-96.png',
+                  vibrate: [200,100,200],
+                  tag: key,
+                  data: { taskId: task.id }
+                });
+              }).catch(() => {
+                new Notification(`${r.emoji} TaskFlow: «${task.title}»`, {
+                  body: `До дедлайну залишилось ${r.label}!`,
+                  icon: './icons/icon-192.png'
+                });
+              });
+              sessionStorage.setItem(key, '1');
+            }
+          }, delay);
+          alarmTimers.push(t);
+        }
+      }
+    });
+  });
+
+  // Tell SW to also check (for background support)
+  navigator.serviceWorker.ready.then(reg => {
+    reg.active?.postMessage({ type: 'SCHEDULE_CHECK' });
+  }).catch(() => {});
+}
+
+// ── Modal ─────────────────────────────────────────────────────────────────────
+function openModal(id = null) {
+  editId = id;
+  if (id) {
+    const t = tasks.find(t => t.id === id);
+    document.getElementById('modal-title').textContent = 'Редагувати задачу';
+    document.getElementById('m-title').value = t.title;
+    document.getElementById('m-priority').value = t.priority;
+    document.getElementById('m-tag').value = t.tag;
+    document.getElementById('m-deadline').value = t.deadline || '';
+    document.getElementById('m-time').value = t.time || '';
+  } else {
+    document.getElementById('modal-title').textContent = 'Нова задача';
+    document.getElementById('m-title').value = document.getElementById('task-input').value.trim();
+    document.getElementById('m-priority').value = 'medium';
+    document.getElementById('m-tag').value = 'work';
+    document.getElementById('m-deadline').value = '';
+    document.getElementById('m-time').value = '';
+  }
+  updateNotifPreview();
+  document.getElementById('modal').classList.add('open');
+  setTimeout(() => document.getElementById('m-title').focus(), 100);
+}
+function closeModal() {
+  document.getElementById('modal').classList.remove('open');
+  editId = null;
+}
+
+// Show reminder preview in modal
+function updateNotifPreview() {
+  const d = document.getElementById('m-deadline').value;
+  const t = document.getElementById('m-time').value;
+  const preview = document.getElementById('notif-preview');
+  if (!d) { preview.style.display='none'; return; }
+  const deadlineMs = new Date(`${d}T${t||'23:59'}`).getTime();
+  const now = Date.now();
+  const chips = [
+    { min:1440, label:'за 24 год' },
+    { min:60,   label:'за 1 год'  },
+    { min:5,    label:'за 5 хв'   },
+  ].filter(r => (deadlineMs - r.min*60000) > now)
+   .map(r => `<span class="notif-chip">🔔 ${r.label}</span>`).join('');
+  if (chips) {
+    preview.style.display='block';
+    document.getElementById('notif-times').innerHTML = chips;
+  } else {
+    preview.style.display='none';
+  }
+}
+document.getElementById('m-deadline').addEventListener('change', updateNotifPreview);
+document.getElementById('m-time').addEventListener('change', updateNotifPreview);
+
+function saveTask() {
+  const title = document.getElementById('m-title').value.trim();
+  if (!title) { document.getElementById('m-title').focus(); return; }
+  const priority = document.getElementById('m-priority').value;
+  const tag = document.getElementById('m-tag').value;
+  const deadline = document.getElementById('m-deadline').value;
+  const time = document.getElementById('m-time').value;
+
+  if (editId) {
+    const t = tasks.find(t => t.id === editId);
+    Object.assign(t, { title, priority, tag, deadline, time });
+    // Clear fired flags so rescheduled
+    ['1440','60','5'].forEach(k => sessionStorage.removeItem(`fired_${t.id}_${k}`));
+  } else {
+    tasks.unshift({ id: Date.now().toString(), title, priority, tag, deadline, time, done:false, created:Date.now() });
+  }
+  document.getElementById('task-input').value = '';
+  save(); renderTasks(); closeModal();
+}
+
+function toggleDone(id) {
+  const t = tasks.find(t => t.id === id);
+  if (t) { t.done = !t.done; save(); renderTasks(); }
+}
+function deleteTask(id) {
+  tasks = tasks.filter(t => t.id !== id);
+  save(); renderTasks();
+}
+function setFilter(f, btn) {
+  currentFilter = f;
+  document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  renderTasks();
+}
+
+// ── Utils ─────────────────────────────────────────────────────────────────────
+function getDeadlineStatus(deadline, time) {
+  if (!deadline) return null;
+  const d = new Date(`${deadline}T${time||'23:59'}`);
+  const diff = (d - Date.now()) / 60000; // minutes
+  if (diff < 0) return 'overdue';
+  if (diff < 60) return 'soon';
+  if (diff < 1440) return 'today';
+  return 'ok';
+}
+function formatDateTime(d, t) {
+  if (!d) return '';
+  const date = new Date(`${d}T${t||'00:00'}`);
+  const dateStr = date.toLocaleDateString('uk-UA', { day:'2-digit', month:'short' });
+  const timeStr = t ? date.toLocaleTimeString('uk-UA', { hour:'2-digit', minute:'2-digit' }) : '';
+  return timeStr ? `${dateStr} о ${timeStr}` : dateStr;
+}
+function getReminderChips(task) {
+  if (!task.deadline || task.done) return '';
+  const deadlineMs = new Date(`${task.deadline}T${task.time||'23:59'}`).getTime();
+  const now = Date.now();
+  const reminders = [
+    { min:1440, label:'24 год' },
+    { min:60,   label:'1 год'  },
+    { min:5,    label:'5 хв'   },
+  ];
+  return reminders
+    .filter(r => (deadlineMs - r.min*60000) > now)
+    .map(r => `<span class="notif-chip">🔔 ${r.label}</span>`).join('');
+}
+function getFiltered() {
+  const q = document.getElementById('search-input').value.toLowerCase();
+  return tasks.filter(t => {
+    if (q && !t.title.toLowerCase().includes(q)) return false;
+    if (currentFilter === 'active') return !t.done;
+    if (currentFilter === 'done') return t.done;
+    if (currentFilter === 'high') return t.priority === 'high' && !t.done;
+    if (currentFilter === 'overdue') return getDeadlineStatus(t.deadline, t.time) === 'overdue' && !t.done;
+    return true;
+  });
+}
+
+// ── Render ────────────────────────────────────────────────────────────────────
+function renderTasks() {
+  const list = document.getElementById('task-list');
+  const filtered = getFiltered();
+  const done = tasks.filter(t => t.done).length;
+  const total = tasks.length;
+  document.getElementById('stat-total').textContent = total;
+  document.getElementById('stat-done').textContent = done;
+  document.getElementById('progress-text').textContent = `${done} / ${total} задач`;
+  document.getElementById('progress-fill').style.width = total ? `${(done/total*100).toFixed(0)}%` : '0%';
+
+  if (!filtered.length) {
+    list.innerHTML = `<div class="empty"><div class="empty-icon">✨</div><p>Задачі не знайдено</p></div>`;
+    return;
+  }
+
+  list.innerHTML = filtered.map(t => {
+    const ds = getDeadlineStatus(t.deadline, t.time);
+    const dlClass = ds === 'overdue' ? 'overdue' : (ds === 'soon' || ds === 'today') ? 'soon' : '';
+    const dlIcon  = ds === 'overdue' ? '⏰' : ds === 'soon' ? '🚨' : ds === 'today' ? '⚡' : '📅';
+    const chips   = getReminderChips(t);
+    return `
+      <div class="task-item priority-${t.priority} ${t.done?'done':''}"
+        draggable="true" data-id="${t.id}"
+        ondragstart="dragStart(event)" ondragover="dragOver(event)"
+        ondrop="drop(event)" ondragend="dragEnd(event)" ondragleave="dragLeave(event)">
+        <div class="drag-handle">⠿</div>
+        <div class="checkbox ${t.done?'checked':''}" onclick="toggleDone('${t.id}')"></div>
+        <div class="task-content">
+          <div class="task-title">${esc(t.title)}</div>
+          <div class="task-meta">
+            <span class="tag tag-${t.tag}">${tagIcons[t.tag]} ${tagLabels[t.tag]}</span>
+            <span class="priority-badge ${t.priority}">${t.priority==='high'?'Важливо':t.priority==='medium'?'Середній':'Низький'}</span>
+            ${t.deadline ? `<span class="deadline ${dlClass}">${dlIcon} ${formatDateTime(t.deadline,t.time)}</span>` : ''}
+          </div>
+          ${chips ? `<div class="notif-chips">${chips}</div>` : ''}
+        </div>
+        <div class="task-actions">
+          <button class="action-btn" onclick="openModal('${t.id}')" title="Редагувати">✏️</button>
+          <button class="action-btn delete" onclick="deleteTask('${t.id}')" title="Видалити">🗑️</button>
+        </div>
+      </div>`;
+  }).join('');
+}
+function esc(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ── Drag & Drop ───────────────────────────────────────────────────────────────
+function dragStart(e) { dragSrcId=e.currentTarget.dataset.id; e.currentTarget.classList.add('dragging'); e.dataTransfer.effectAllowed='move'; }
+function dragOver(e) { e.preventDefault(); e.dataTransfer.dropEffect='move'; document.querySelectorAll('.task-item').forEach(el=>el.classList.remove('drag-over')); e.currentTarget.classList.add('drag-over'); }
+function dragLeave(e) { e.currentTarget.classList.remove('drag-over'); }
+function dragEnd(e) { e.currentTarget.classList.remove('dragging'); document.querySelectorAll('.task-item').forEach(el=>el.classList.remove('drag-over')); }
+function drop(e) {
+  e.preventDefault();
+  const targetId=e.currentTarget.dataset.id;
+  if (dragSrcId===targetId) return;
+  const si=tasks.findIndex(t=>t.id===dragSrcId), ti=tasks.findIndex(t=>t.id===targetId);
+  const [m]=tasks.splice(si,1); tasks.splice(ti,0,m);
+  save(); renderTasks();
+}
+
+// ── Keyboard ──────────────────────────────────────────────────────────────────
+document.addEventListener('keydown', e => {
+  if (e.key==='Escape') closeModal();
+  if (e.key==='Enter' && document.getElementById('modal').classList.contains('open') && e.target.id==='m-title') saveTask();
+});
+document.getElementById('modal').addEventListener('click', e => { if (e.target===e.currentTarget) closeModal(); });
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+checkNotifBanner();
+syncTasksToIDB(tasks);
+scheduleBrowserAlarms();
+renderTasks();
+
+// Re-check alarms every minute (handles page being open long time)
+setInterval(scheduleBrowserAlarms, 60000);
+</script>
+</body>
+</html>
