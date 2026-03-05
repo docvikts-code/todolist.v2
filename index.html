@@ -341,6 +341,7 @@
       <button class="btn-install hidden" id="btn-install-header" onclick="installPWA()">
         📲 Встановити додаток
       </button>
+      <button onclick="toggleDiag()" style="background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.15);border-radius:10px;color:var(--text-muted);cursor:pointer;font-size:.8rem;padding:6px 12px;">🔧 FCM</button>
       <div class="stats">
         <div class="stat-chip">Всього: <span id="stat-total">0</span></div>
         <div class="stat-chip">Виконано: <span id="stat-done">0</span></div>
@@ -350,7 +351,15 @@
 
   <div class="sw-status hidden" id="sw-status"></div>
 
-  <div class="glass add-form">
+  <!-- FCM Diagnostic Panel -->
+  <div class="glass" id="diag-panel" style="display:none;padding:16px 18px;margin-bottom:20px;font-size:.82rem;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+      <span style="font-family:'Syne',sans-serif;font-weight:700;color:var(--accent);">🔧 FCM Діагностика</span>
+      <button onclick="document.getElementById('diag-panel').style.display='none'" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:1rem;">✕</button>
+    </div>
+    <div id="diag-log" style="font-family:monospace;color:var(--text-muted);line-height:1.8;word-break:break-all;"></div>
+    <button class="btn btn-primary" style="margin-top:12px;width:100%;padding:10px;" onclick="runFCMDiag()">🔄 Повторити підключення</button>
+  </div>
     <div class="form-row">
       <input type="text" id="task-input" placeholder="Додати нову задачу..." />
       <button class="btn btn-primary" onclick="openModal()">+ Додати</button>
@@ -875,13 +884,96 @@ document.addEventListener('keydown', e => {
 });
 document.getElementById('modal').addEventListener('click', e => { if (e.target===e.currentTarget) closeModal(); });
 
+// ── FCM Diagnostics ───────────────────────────────────────────────────────────
+function toggleDiag() {
+  const p = document.getElementById('diag-panel');
+  p.style.display = p.style.display === 'none' ? 'block' : 'none';
+  if (p.style.display === 'block') runFCMDiag();
+}
+
+function diagLog(msg, ok) {
+  const el = document.getElementById('diag-log');
+  const icon = ok === true ? '✅' : ok === false ? '❌' : 'ℹ️';
+  el.innerHTML += `<div style="color:${ok===false?'#f87171':ok===true?'#4ade80':'#94a3b8'}">${icon} ${msg}</div>`;
+}
+
+async function runFCMDiag() {
+  document.getElementById('diag-log').innerHTML = '';
+  diagLog('Перевірка браузера...');
+
+  // 1. Check SW support
+  if (!('serviceWorker' in navigator)) { diagLog('Service Worker не підтримується', false); return; }
+  diagLog('Service Worker підтримується', true);
+
+  // 2. Check Notification API
+  if (!('Notification' in window)) { diagLog('Notification API відсутній', false); return; }
+  diagLog(`Дозвіл сповіщень: <b>${Notification.permission}</b>`, Notification.permission === 'granted');
+
+  if (Notification.permission !== 'granted') {
+    diagLog('Натисни "Дозволити" вище або в налаштуваннях системи', false);
+    return;
+  }
+
+  // 3. Try registering SW
+  diagLog('Реєстрація Service Worker...');
+  let swReg;
+  try {
+    swReg = await navigator.serviceWorker.register('./firebase-messaging-sw.js');
+    diagLog('SW зареєстровано: ' + swReg.scope, true);
+  } catch(e) {
+    diagLog('SW помилка: ' + e.message, false);
+    return;
+  }
+
+  // 4. Wait for SW to be active
+  diagLog('Очікування активації SW...');
+  await new Promise(res => {
+    if (swReg.active) { res(); return; }
+    const w = swReg.installing || swReg.waiting;
+    if (w) w.addEventListener('statechange', e => { if (e.target.state === 'activated') res(); });
+    else setTimeout(res, 2000);
+  });
+  diagLog('SW активний', true);
+
+  // 5. Get FCM token
+  diagLog('Отримання FCM токену...');
+  try {
+    const token = await fbMsg.getToken({ vapidKey: VAPID_KEY, serviceWorkerRegistration: swReg });
+    if (token) {
+      diagLog('FCM токен отримано: ' + token.slice(0,20) + '...', true);
+      // Save to Firebase DB
+      diagLog('Збереження токену в Firebase...');
+      await fbDB.ref(`users/${UID}/fcmToken`).set(token);
+      await syncToFirebase();
+      diagLog('Токен збережено в Firebase DB!', true);
+      diagLog(`UID: ${UID}`, true);
+      showSwStatus('✅ Push-нагадування активні — прийдуть навіть коли додаток закритий!', 'ok');
+    } else {
+      diagLog('FCM токен порожній — можливо заблоковано браузером', false);
+    }
+  } catch(e) {
+    diagLog('FCM помилка: ' + e.message, false);
+    if (e.message.includes('messaging/unsupported-browser')) {
+      diagLog('Цей браузер не підтримує FCM. Спробуй Chrome або Edge.', false);
+    }
+    if (e.message.includes('messaging/permission-blocked')) {
+      diagLog('Сповіщення заблоковані. Відкрий налаштування браузера і дозволь.', false);
+    }
+  }
+}
+
 // ── Init ──────────────────────────────────────────────────────────────────────
 checkNotifBanner();
 syncTasksToIDB(tasks);
 scheduleBrowserAlarms();
 renderTasks();
 
-// Re-check alarms every minute (handles page being open long time)
+// If notifications already granted — setup FCM immediately
+if ('Notification' in window && Notification.permission === 'granted') {
+  setupFCM();
+}
+
+// Re-check alarms every minute
 setInterval(scheduleBrowserAlarms, 60000);
 </script>
 </body>
