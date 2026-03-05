@@ -304,6 +304,10 @@
 
   @keyframes fadeDown { from{opacity:0;transform:translateY(-16px)} to{opacity:1;transform:translateY(0)} }
 </style>
+<!-- Firebase SDK -->
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-messaging-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
 </head>
 <body>
 <div class="bg"></div>
@@ -502,28 +506,77 @@ function injectManifest() {
 }
 injectManifest();
 
-// ── Service Worker registration ───────────────────────────────────────────────
+// ── Firebase + FCM Setup ──────────────────────────────────────────────────────
+const FB_CONFIG = {
+  apiKey: "AIzaSyDxKm4WjGFaU5IIzIcoKuvsg4_txmV0qK4",
+  authDomain: "taskflow-aff2b.firebaseapp.com",
+  projectId: "taskflow-aff2b",
+  storageBucket: "taskflow-aff2b.firebasestorage.app",
+  messagingSenderId: "514083043856",
+  appId: "1:514083043856:web:e8ed92c7acbee6f42b6895",
+  databaseURL: "https://taskflow-aff2b-default-rtdb.firebaseio.com"
+};
+const VAPID_KEY = "BOzq8Vw438Y-qqsTO1JliqmpYrXD1Q6laBeHg7xpBC0m4tUwmYNJfQfdN0lsGkw-O0pUzpjpYCRrPCC1ZYdXZnM";
+
+const fbApp = firebase.initializeApp(FB_CONFIG);
+const fbDB  = firebase.database();
+const fbMsg = firebase.messaging();
+
+let UID = localStorage.getItem('taskflow-uid');
+if (!UID) { UID = 'u_' + Math.random().toString(36).slice(2, 10); localStorage.setItem('taskflow-uid', UID); }
+
+// Sync tasks to Firebase so GitHub Actions can read them
+async function syncToFirebase() {
+  try {
+    const tasksObj = {};
+    tasks.forEach(t => { tasksObj[t.id] = t; });
+    await fbDB.ref(`users/${UID}/tasks`).set(tasksObj);
+  } catch(e) { console.warn('Firebase sync:', e.message); }
+}
+
+// ── Override save to also push to Firebase ────────────────────────────────────
+const _baseSave = save;
+function save() { _baseSave(); syncToFirebase(); }
+
+// ── FCM: get push token and save to DB ───────────────────────────────────────
 function showSwStatus(msg, type) {
   const el = document.getElementById('sw-status');
   el.textContent = msg; el.className = `sw-status ${type}`;
-  if (type === 'ok') setTimeout(() => el.classList.add('hidden'), 6000);
+  if (type === 'ok') setTimeout(() => el.classList.add('hidden'), 8000);
 }
-if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('./sw.js').then(reg => {
-    console.log('✅ SW registered:', reg.scope);
-    showSwStatus('✅ Service Worker активний — нагадування у фоні працюють', 'ok');
-    if ('periodicSync' in reg) {
-      navigator.permissions.query({ name: 'periodic-background-sync' })
-        .then(s => { if (s.state === 'granted') reg.periodicSync.register('check-tasks', { minInterval: 60000 }); })
-        .catch(() => {});
+
+async function setupFCM() {
+  try {
+    const swReg = await navigator.serviceWorker.register('./firebase-messaging-sw.js');
+    const token = await fbMsg.getToken({ vapidKey: VAPID_KEY, serviceWorkerRegistration: swReg });
+    if (token) {
+      await fbDB.ref(`users/${UID}/fcmToken`).set(token);
+      await syncToFirebase();
+      showSwStatus('✅ Push-нагадування активні — прийдуть навіть коли додаток закритий!', 'ok');
     }
-  }).catch(e => {
-    console.warn('SW error:', e);
-    showSwStatus('⚠️ Service Worker не зареєстровано: ' + e.message, 'warn');
-  });
-} else {
-  showSwStatus('⚠️ Цей браузер не підтримує Service Worker', 'warn');
+  } catch(e) {
+    console.warn('FCM error:', e);
+    showSwStatus('⚠️ Push не налаштовано: відкрий додаток і дозволь сповіщення', 'warn');
+  }
 }
+
+// Handle foreground messages
+fbMsg.onMessage(payload => {
+  const n = payload.notification || {};
+  if (Notification.permission === 'granted') {
+    new Notification(n.title || '⏰ TaskFlow', { body: n.body, icon: ICONS['192'] });
+  }
+});
+
+// ── Service Worker + FCM init ─────────────────────────────────────────────────
+if ('serviceWorker' in navigator && 'Notification' in window) {
+  if (Notification.permission === 'granted') {
+    setupFCM();
+  }
+} else {
+  showSwStatus('⚠️ Цей браузер не підтримує push-сповіщення', 'warn');
+}
+
 
 // ── PWA install prompt ────────────────────────────────────────────────────────
 window.addEventListener('beforeinstallprompt', e => {
@@ -561,8 +614,8 @@ async function requestNotifPermission() {
   const perm = await Notification.requestPermission();
   document.getElementById('notif-banner').classList.add('hidden');
   if (perm === 'granted') {
-    scheduleBrowserAlarms();
-    new Notification('TaskFlow ✅', { body: 'Нагадування увімкнені! Не пропустиш жодного дедлайну.', icon: ICONS['192'] });
+    scheduleBrowserAlarms(); // keep local alarms as fallback
+    setupFCM();              // setup real FCM push
   }
 }
 
