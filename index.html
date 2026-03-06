@@ -308,6 +308,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-messaging-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
 </head>
 <body>
 <div class="bg"></div>
@@ -530,13 +531,22 @@ const VAPID_KEY = "BOzq8Vw438Y-qqsTO1JliqmpYrXD1Q6laBeHg7xpBC0m4tUwmYNJfQfdN0lsG
 const fbApp = firebase.initializeApp(FB_CONFIG);
 const fbDB  = firebase.database();
 const fbMsg = firebase.messaging();
+const fbAuth = firebase.auth();
 
 let UID = localStorage.getItem('taskflow-uid');
 if (!UID) { UID = 'u_' + Math.random().toString(36).slice(2, 10); localStorage.setItem('taskflow-uid', UID); }
 
+// Sign in anonymously so Firebase DB rules allow read/write
+async function ensureAuth() {
+  if (fbAuth.currentUser) return fbAuth.currentUser;
+  const cred = await fbAuth.signInAnonymously();
+  return cred.user;
+}
+
 // Sync tasks to Firebase so GitHub Actions can read them
 async function syncToFirebase() {
   try {
+    await ensureAuth();
     const tasksObj = {};
     tasks.forEach(t => { tasksObj[t.id] = t; });
     await fbDB.ref(`users/${UID}/tasks`).set(tasksObj);
@@ -556,6 +566,7 @@ function showSwStatus(msg, type) {
 
 async function setupFCM() {
   try {
+    await ensureAuth();
     const swReg = await navigator.serviceWorker.register('./firebase-messaging-sw.js');
     const token = await fbMsg.getToken({ vapidKey: VAPID_KEY, serviceWorkerRegistration: swReg });
     if (token) {
@@ -925,7 +936,17 @@ async function runFCMDiag() {
     return;
   }
 
-  // 4. Wait for SW to be active
+  // 4. Authenticate anonymously
+  diagLog('Анонімна автентифікація Firebase...');
+  try {
+    await ensureAuth();
+    diagLog('Автентифіковано: ' + (fbAuth.currentUser?.uid?.slice(0,12) + '...'), true);
+  } catch(e) {
+    diagLog('Auth помилка: ' + e.message, false);
+    return;
+  }
+
+  // 5. Get FCM token
   diagLog('Очікування активації SW...');
   await new Promise(res => {
     if (swReg.active) { res(); return; }
