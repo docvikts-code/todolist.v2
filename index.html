@@ -452,8 +452,9 @@ const tagIcons  = { work:'💼', personal:'🏠', health:'💪', finance:'💰',
 // ── Persist ───────────────────────────────────────────────────────────────────
 function save() {
   localStorage.setItem('taskflow-tasks', JSON.stringify(tasks));
-  syncTasksToIDB(tasks); // keep SW in sync
-  scheduleBrowserAlarms(); // reset timers
+  syncTasksToIDB(tasks);
+  scheduleBrowserAlarms();
+  syncTasksToOneSignal();
 }
 
 // ── IndexedDB sync (for Service Worker) ──────────────────────────────────────
@@ -534,9 +535,7 @@ function syncTasksToOneSignal() {
   } catch(e) { console.warn('OS tags sync:', e.message); }
 }
 
-// Override save to also sync to OneSignal
-const _origSaveOS = save;
-function save() { _origSaveOS(); syncTasksToOneSignal(); }
+// Sync tasks to OneSignal tags so GitHub Actions can read them
 
 function showSwStatus(msg, type) {
   const el = document.getElementById('sw-status');
@@ -900,6 +899,8 @@ async function runFCMDiag() {
 
     if (!optedIn) {
       await OneSignal.User.PushSubscription.optIn();
+      // Wait for subscription ID to be assigned
+      await new Promise(res => setTimeout(res, 2000));
       optedIn = OneSignal.User.PushSubscription.optedIn;
       diagLog('Підписку активовано: ' + optedIn, optedIn);
     }
@@ -913,6 +914,8 @@ async function runFCMDiag() {
     syncTasksToOneSignal();
     diagLog('Задачі синхронізовано', true);
 
+    // Wait for subscription ID
+    await new Promise(res => setTimeout(res, 1500));
     const subId = OneSignal.User.PushSubscription.id;
     diagLog('Subscription ID: ' + (subId ? subId.slice(0,24) + '...' : 'відсутній'), !!subId);
 
