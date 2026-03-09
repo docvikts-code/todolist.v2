@@ -16,7 +16,7 @@ jobs:
           SITE_URL: "https://docvikts-code.github.io/todolist.v2/"
         run: |
           python3 << 'PYEOF'
-          import json, os, time, urllib.request
+          import json, os, time, urllib.request, urllib.error
           from datetime import datetime
 
           APP_ID  = os.environ['ONESIGNAL_APP_ID']
@@ -25,22 +25,28 @@ jobs:
 
           def api_get(url):
             req = urllib.request.Request(url, headers={"Authorization": f"Key {API_KEY}"})
-            return json.loads(urllib.request.urlopen(req).read())
+            return json.loads(urllib.request.urlopen(req, timeout=10).read())
 
           def api_post(url, data, method="POST"):
-            req = urllib.request.Request(url, data=json.dumps(data).encode(),
-              headers={"Authorization": f"Key {API_KEY}", "Content-Type": "application/json"}, method=method)
-            return json.loads(urllib.request.urlopen(req).read())
+            req = urllib.request.Request(url,
+              data=json.dumps(data).encode(),
+              headers={"Authorization": f"Key {API_KEY}", "Content-Type": "application/json"},
+              method=method)
+            return json.loads(urllib.request.urlopen(req, timeout=10).read())
 
-          # Fetch subscribers
+          # Fetch all users via /players endpoint (v1 API - still works)
           try:
-            subs = api_get(f"https://api.onesignal.com/apps/{APP_ID}/subscriptions?limit=200").get('subscriptions', [])
+            result = api_get(f"https://onesignal.com/api/v1/players?app_id={APP_ID}&limit=200")
+            players = result.get('players', [])
           except Exception as e:
-            print(f"Failed: {e}"); exit(0)
+            print(f"Failed to fetch players: {e}")
+            exit(0)
 
-          if not subs:
-            print("No subscribers"); exit(0)
-          print(f"Found {len(subs)} subscribers")
+          if not players:
+            print("No subscribers yet")
+            exit(0)
+
+          print(f"Found {len(players)} subscribers")
 
           now_ms = time.time() * 1000
           REMINDERS = [
@@ -50,51 +56,67 @@ jobs:
           ]
 
           sent_count = 0
-          for sub in subs:
-            ext_id = sub.get('external_id') or sub.get('id')
-            sub_id = sub.get('id')
-            if not sub_id: continue
+
+          for player in players:
+            player_id = player.get('id')
+            tags = player.get('tags', {})
+            if not player_id or not tags:
+              continue
 
             try:
-              user = api_get(f"https://api.onesignal.com/apps/{APP_ID}/users/by/external_id/{ext_id}")
-              tags = user.get('properties', {}).get('tags', {})
-            except: continue
+              tasks = json.loads(tags.get('tasks', '[]'))
+            except:
+              continue
+            try:
+              sent_keys = json.loads(tags.get('sent_notifs', '{}'))
+            except:
+              sent_keys = {}
 
-            try: tasks = json.loads(tags.get('tasks', '[]'))
-            except: continue
-            try: sent_keys = json.loads(tags.get('sent_notifs', '{}'))
-            except: sent_keys = {}
+            updated_sent = dict(sent_keys)
 
             for task in tasks:
-              if task.get('done') or not task.get('deadline'): continue
+              if task.get('done') or not task.get('deadline'):
+                continue
               try:
-                dl_ms = datetime.fromisoformat(task['deadline'] + 'T' + (task.get('time') or '23:59')).timestamp() * 1000
-              except: continue
+                dl_ms = datetime.fromisoformat(
+                  task['deadline'] + 'T' + (task.get('time') or '23:59')
+                ).timestamp() * 1000
+              except:
+                continue
+
               diff_min = (dl_ms - now_ms) / 60000
 
               for r in REMINDERS:
                 key = f"{task['id']}_{r['key']}"
-                if sent_keys.get(key): continue
-                if not (r['min'] - 6 < diff_min <= r['min']): continue
+                if sent_keys.get(key):
+                  continue
+                if not (r['min'] - 6 < diff_min <= r['min']):
+                  continue
+
                 try:
-                  api_post("https://api.onesignal.com/notifications", {
+                  resp = api_post("https://onesignal.com/api/v1/notifications", {
                     "app_id": APP_ID,
-                    "include_subscription_ids": [sub_id],
+                    "include_player_ids": [player_id],
                     "headings": {"en": f"{r['emoji']} «{task['title']}»"},
                     "contents": {"en": f"До дедлайну залишилось {r['label']}"},
                     "url": SITE_URL,
                   })
-                  print(f"✅ {r['key']} → '{task['title']}'")
+                  print(f"✅ {r['key']} → '{task['title']}' → {resp.get('id','')}")
                   sent_count += 1
-                  sent_keys[key] = True
+                  updated_sent[key] = True
                 except Exception as ex:
-                  print(f"❌ {ex}")
+                  print(f"❌ Push failed: {ex}")
 
-            if sent_keys:
+            # Update sent_notifs tag if changed
+            if updated_sent != sent_keys:
               try:
-                api_post(f"https://api.onesignal.com/apps/{APP_ID}/users/by/external_id/{ext_id}",
-                  {"properties": {"tags": {"sent_notifs": json.dumps(sent_keys)}}}, method="PATCH")
-              except: pass
+                api_post(
+                  f"https://onesignal.com/api/v1/players/{player_id}?app_id={APP_ID}",
+                  {"tags": {"sent_notifs": json.dumps(updated_sent)}},
+                  method="PUT"
+                )
+              except Exception as ex:
+                print(f"Tag update failed: {ex}")
 
           print(f"Done. Sent {sent_count} notifications.")
           PYEOF
