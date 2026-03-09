@@ -16,7 +16,7 @@ jobs:
           SITE_URL: "https://docvikts-code.github.io/todolist.v2/"
         run: |
           python3 << 'PYEOF'
-          import json, os, time, urllib.request, urllib.error
+          import json, os, time, urllib.request
           from datetime import datetime
 
           APP_ID  = os.environ['ONESIGNAL_APP_ID']
@@ -34,19 +34,28 @@ jobs:
               method=method)
             return json.loads(urllib.request.urlopen(req, timeout=10).read())
 
-          # Fetch all users via /players endpoint (v1 API - still works)
+          # Fetch users (has tags)
           try:
-            result = api_get(f"https://onesignal.com/api/v1/players?app_id={APP_ID}&limit=200")
-            players = result.get('players', [])
+            result = api_get(f"https://api.onesignal.com/apps/{APP_ID}/users?limit=200")
+            users = result.get('users', [])
           except Exception as e:
-            print(f"Failed to fetch players: {e}")
+            print(f"Failed to fetch users: {e}")
+            # fallback to players API
+            try:
+              result = api_get(f"https://onesignal.com/api/v1/players?app_id={APP_ID}&limit=200")
+              players = result.get('players', [])
+              users = [{'onesignal_id': p['id'], 'external_id': p.get('external_user_id',''), 
+                        'subscriptions': [{'id': p['id'], 'type': 'ChromePush'}],
+                        'properties': {'tags': p.get('tags', {})}} for p in players]
+            except Exception as e2:
+              print(f"Fallback also failed: {e2}")
+              exit(0)
+
+          if not users:
+            print("No users yet")
             exit(0)
 
-          if not players:
-            print("No subscribers yet")
-            exit(0)
-
-          print(f"Found {len(players)} subscribers")
+          print(f"Found {len(users)} users")
 
           now_ms = time.time() * 1000
           REMINDERS = [
@@ -57,10 +66,12 @@ jobs:
 
           sent_count = 0
 
-          for player in players:
-            player_id = player.get('id')
-            tags = player.get('tags', {})
-            if not player_id or not tags:
+          for user in users:
+            ext_id = user.get('external_id', '')
+            onesignal_id = user.get('onesignal_id', '')
+            tags = user.get('properties', {}).get('tags', {})
+
+            if not ext_id or not tags:
               continue
 
             try:
@@ -72,6 +83,11 @@ jobs:
             except:
               sent_keys = {}
 
+            if not tasks:
+              print(f"User {ext_id}: no tasks")
+              continue
+
+            print(f"User {ext_id}: {len(tasks)} tasks")
             updated_sent = dict(sent_keys)
 
             for task in tasks:
@@ -96,7 +112,8 @@ jobs:
                 try:
                   resp = api_post("https://onesignal.com/api/v1/notifications", {
                     "app_id": APP_ID,
-                    "include_player_ids": [player_id],
+                    "include_aliases": {"external_id": [ext_id]},
+                    "target_channel": "push",
                     "headings": {"en": f"{r['emoji']} «{task['title']}»"},
                     "contents": {"en": f"До дедлайну залишилось {r['label']}"},
                     "url": SITE_URL,
@@ -107,13 +124,13 @@ jobs:
                 except Exception as ex:
                   print(f"❌ Push failed: {ex}")
 
-            # Update sent_notifs tag if changed
+            # Update sent_notifs tag
             if updated_sent != sent_keys:
               try:
                 api_post(
-                  f"https://onesignal.com/api/v1/players/{player_id}?app_id={APP_ID}",
-                  {"tags": {"sent_notifs": json.dumps(updated_sent)}},
-                  method="PUT"
+                  f"https://api.onesignal.com/apps/{APP_ID}/users/by/external_id/{ext_id}",
+                  {"properties": {"tags": {"sent_notifs": json.dumps(updated_sent)}}},
+                  method="PATCH"
                 )
               except Exception as ex:
                 print(f"Tag update failed: {ex}")
