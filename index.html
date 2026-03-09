@@ -546,26 +546,25 @@ function showSwStatus(msg, type) {
 
 async function setupOneSignal() {
   try {
-    await OneSignal.init({
-      appId: ONESIGNAL_APP_ID,
-      notifyButton: { enable: false },
-      allowLocalhostAsSecureOrigin: true,
-    });
-    const perm = await OneSignal.Notifications.permission;
+    if (!window.OneSignal) return;
+    const perm = OneSignal.Notifications.permission;
     if (!perm) {
       await OneSignal.Notifications.requestPermission();
     }
-    const isSubscribed = await OneSignal.User.PushSubscription.optedIn;
-    if (isSubscribed) {
+    const optedIn = OneSignal.User.PushSubscription.optedIn;
+    if (!optedIn) await OneSignal.User.PushSubscription.optIn();
+
+    const uid = localStorage.getItem('taskflow-uid') || ('u_' + Math.random().toString(36).slice(2,10));
+    localStorage.setItem('taskflow-uid', uid);
+    await OneSignal.login(uid);
+    syncTasksToOneSignal();
+
+    const subId = OneSignal.User.PushSubscription.id;
+    if (subId) {
       showSwStatus('✅ Push-нагадування активні — прийдуть навіть коли додаток закритий!', 'ok');
-      // Store external user id for GitHub Actions targeting
-      const uid = localStorage.getItem('taskflow-uid') || 'u_' + Math.random().toString(36).slice(2,10);
-      localStorage.setItem('taskflow-uid', uid);
-      await OneSignal.login(uid);
     }
   } catch(e) {
     console.warn('OneSignal error:', e);
-    showSwStatus('⚠️ Push не налаштовано: ' + e.message, 'warn');
   }
 }
 
@@ -884,39 +883,42 @@ async function runFCMDiag() {
   document.getElementById('diag-log').innerHTML = '';
   diagLog('Перевірка OneSignal...');
 
-  if (!window.OneSignal) { diagLog('OneSignal SDK не завантажено — зачекай секунду і спробуй знову', false); return; }
+  if (!window.OneSignal) { diagLog('OneSignal SDK не завантажено', false); return; }
   diagLog('OneSignal SDK завантажено', true);
 
   try {
-    diagLog('Ініціалізація...');
-    await OneSignal.init({ appId: ONESIGNAL_APP_ID, notifyButton: { enable: false }, allowLocalhostAsSecureOrigin: true });
-    diagLog('OneSignal ініціалізовано', true);
-
     const perm = OneSignal.Notifications.permission;
     diagLog(`Дозвіл сповіщень: ${perm ? 'granted' : 'not granted'}`, perm);
+
     if (!perm) {
       diagLog('Запитую дозвіл...', null);
       await OneSignal.Notifications.requestPermission();
     }
 
-    const optedIn = OneSignal.User.PushSubscription.optedIn;
+    let optedIn = OneSignal.User.PushSubscription.optedIn;
     diagLog(`Push підписка: ${optedIn ? 'активна' : 'неактивна'}`, optedIn);
+
     if (!optedIn) {
       await OneSignal.User.PushSubscription.optIn();
-      diagLog('Підписку активовано!', true);
+      optedIn = OneSignal.User.PushSubscription.optedIn;
+      diagLog('Підписку активовано: ' + optedIn, optedIn);
     }
 
     const uid = localStorage.getItem('taskflow-uid') || ('u_' + Math.random().toString(36).slice(2,10));
     localStorage.setItem('taskflow-uid', uid);
     await OneSignal.login(uid);
-    diagLog('User ID збережено: ' + uid, true);
+    diagLog('User ID: ' + uid, true);
+
+    // Sync tasks
+    syncTasksToOneSignal();
+    diagLog('Задачі синхронізовано', true);
 
     const subId = OneSignal.User.PushSubscription.id;
     diagLog('Subscription ID: ' + (subId ? subId.slice(0,24) + '...' : 'відсутній'), !!subId);
 
     if (subId) {
       showSwStatus('✅ Push-нагадування активні — прийдуть навіть коли додаток закритий!', 'ok');
-      diagLog('🎉 Все готово! Push працює у фоні.', true);
+      diagLog('🎉 Все готово!', true);
     } else {
       diagLog('Підписка не отримана — можливо браузер заблокував', false);
     }
