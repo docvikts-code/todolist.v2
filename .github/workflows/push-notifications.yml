@@ -118,7 +118,7 @@ jobs:
                 try:
                   resp = api_post("https://onesignal.com/api/v1/notifications", {
                     "app_id": APP_ID,
-                    "include_player_ids": [player_id],
+                    "include_aliases": {"external_id": [ext_id]}, "target_channel": "push",
                     "headings": {"en": f"{r['emoji']} «{task['title']}»"},
                     "contents": {"en": f"До дедлайну залишилось {r['label']}"},
                     "url": SITE_URL,
