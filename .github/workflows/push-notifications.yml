@@ -17,11 +17,13 @@ jobs:
         run: |
           python3 << 'PYEOF'
           import json, os, time, urllib.request
-          from datetime import datetime
+          from datetime import datetime, timezone, timedelta
 
           APP_ID  = os.environ['ONESIGNAL_APP_ID']
           API_KEY = os.environ['ONESIGNAL_API_KEY']
           SITE_URL = os.environ['SITE_URL']
+
+          KYIV = timezone(timedelta(hours=2))  # UTC+2
 
           def api_get(url):
             req = urllib.request.Request(url, headers={"Authorization": f"Key {API_KEY}"})
@@ -34,7 +36,7 @@ jobs:
               method=method)
             return json.loads(urllib.request.urlopen(req, timeout=10).read())
 
-          # Fetch players via v1 API (has tags)
+          # Fetch players via v1 API
           try:
             result = api_get(f"https://onesignal.com/api/v1/players?app_id={APP_ID}&limit=200")
             players = result.get('players', [])
@@ -49,6 +51,9 @@ jobs:
           print(f"Found {len(players)} players")
 
           now_ms = time.time() * 1000
+          now_kyiv = datetime.now(KYIV).strftime('%H:%M')
+          print(f"Current Kyiv time: {now_kyiv}")
+
           REMINDERS = [
             {"min": 1440, "label": "24 години", "emoji": "📅", "key": "24h"},
             {"min": 60,   "label": "1 годину",  "emoji": "⏰", "key": "1h"},
@@ -65,7 +70,6 @@ jobs:
             if not player_id:
               continue
 
-            # If player has no tags, try fetching user by external_id
             if not tags.get('tasks') and ext_id:
               try:
                 user = api_get(f"https://onesignal.com/api/v1/players/{player_id}?app_id={APP_ID}")
@@ -94,9 +98,10 @@ jobs:
               if task.get('done') or not task.get('deadline'):
                 continue
               try:
-                dl_ms = datetime.fromisoformat(
-                  task['deadline'] + 'T' + (task.get('time') or '23:59')
-                ).timestamp() * 1000
+                # Parse deadline as Kyiv time (UTC+2)
+                dl_naive = datetime.fromisoformat(task['deadline'] + 'T' + (task.get('time') or '23:59'))
+                dl_kyiv = dl_naive.replace(tzinfo=KYIV)
+                dl_ms = dl_kyiv.timestamp() * 1000
               except:
                 continue
 
@@ -124,7 +129,6 @@ jobs:
                 except Exception as ex:
                   print(f"  ❌ Push failed: {ex}")
 
-            # Update sent_notifs tag
             if updated_sent != sent_keys:
               try:
                 api_post(
