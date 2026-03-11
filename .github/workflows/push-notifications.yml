@@ -13,7 +13,7 @@ jobs:
         env:
           ONESIGNAL_APP_ID: "9b0e3726-37de-4173-b378-cc446ca4fd73"
           ONESIGNAL_API_KEY: ${{ secrets.ONESIGNAL_API_KEY }}
-          SITE_URL: "https://docvikts-code.github.io/todolist.v2/"
+          SITE_URL: "https://storied-piroshki-5d1420.netlify.app/"
         run: |
           python3 << 'PYEOF'
           import json, os, time, urllib.request
