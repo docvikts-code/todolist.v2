@@ -9,96 +9,91 @@ jobs:
   send-reminders:
     runs-on: ubuntu-latest
     steps:
-      - name: Send OneSignal push for upcoming deadlines
+      - name: Send Telegram reminders for upcoming deadlines
         env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           ONESIGNAL_APP_ID: "9b0e3726-37de-4173-b378-cc446ca4fd73"
           ONESIGNAL_API_KEY: ${{ secrets.ONESIGNAL_API_KEY }}
-          SITE_URL: "https://storied-piroshki-5d1420.netlify.app/"
         run: |
           python3 << 'PYEOF'
-          import json, os, time, urllib.request
+          import json, os, time, urllib.request, urllib.parse
           from datetime import datetime, timezone, timedelta
 
-          APP_ID  = os.environ['ONESIGNAL_APP_ID']
-          API_KEY = os.environ['ONESIGNAL_API_KEY']
-          SITE_URL = os.environ['SITE_URL']
+          TG_TOKEN = os.environ['TELEGRAM_TOKEN']
+          TG_CHAT  = os.environ['TELEGRAM_CHAT_ID']
+          OS_APP   = os.environ['ONESIGNAL_APP_ID']
+          OS_KEY   = os.environ['ONESIGNAL_API_KEY']
+          KYIV     = timezone(timedelta(hours=2))
+          SITE_URL = "https://storied-piroshki-5d1420.netlify.app"
 
-          KYIV = timezone(timedelta(hours=2))  # UTC+2
-
-          def api_get(url):
-            req = urllib.request.Request(url, headers={"Authorization": f"Key {API_KEY}"})
+          def tg_send(text):
+            data = urllib.parse.urlencode({
+              'chat_id': TG_CHAT,
+              'text': text,
+              'parse_mode': 'HTML'
+            }).encode()
+            req = urllib.request.Request(
+              f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
+              data=data)
             return json.loads(urllib.request.urlopen(req, timeout=10).read())
 
-          def api_post(url, data, method="POST"):
+          def os_get(url):
+            req = urllib.request.Request(url, headers={"Authorization": f"Key {OS_KEY}"})
+            return json.loads(urllib.request.urlopen(req, timeout=10).read())
+
+          def os_put(url, data):
             req = urllib.request.Request(url,
               data=json.dumps(data).encode(),
-              headers={"Authorization": f"Key {API_KEY}", "Content-Type": "application/json"},
-              method=method)
+              headers={"Authorization": f"Key {OS_KEY}", "Content-Type": "application/json"},
+              method="PUT")
             return json.loads(urllib.request.urlopen(req, timeout=10).read())
 
-          # Fetch players via v1 API
+          # Fetch players from OneSignal (for sent_notifs tracking)
           try:
-            result = api_get(f"https://onesignal.com/api/v1/players?app_id={APP_ID}&limit=200")
+            result = os_get(f"https://onesignal.com/api/v1/players?app_id={OS_APP}&limit=200")
             players = result.get('players', [])
           except Exception as e:
-            print(f"Failed to fetch players: {e}")
-            exit(0)
-
-          if not players:
-            print("No subscribers yet")
-            exit(0)
-
-          print(f"Found {len(players)} players")
+            print(f"OneSignal fetch failed: {e}")
+            players = []
 
           now_ms = time.time() * 1000
           now_kyiv = datetime.now(KYIV).strftime('%H:%M')
           print(f"Current Kyiv time: {now_kyiv}")
 
           REMINDERS = [
-            {"min": 1440, "label": "24 години", "emoji": "📅", "key": "24h"},
-            {"min": 60,   "label": "1 годину",  "emoji": "⏰", "key": "1h"},
-            {"min": 5,    "label": "5 хвилин",  "emoji": "🚨", "key": "5m"},
+            {"min": 1440, "label": "24 години",  "emoji": "📅", "key": "24h"},
+            {"min": 60,   "label": "1 годину",   "emoji": "⏰", "key": "1h"},
+            {"min": 5,    "label": "5 хвилин",   "emoji": "🚨", "key": "5m"},
           ]
 
           sent_count = 0
 
           for player in players:
             player_id = player.get('id')
-            ext_id = player.get('external_user_id', '')
             tags = player.get('tags', {})
-
-            if not player_id:
+            if not player_id or not tags.get('tasks'):
               continue
-
-            if not tags.get('tasks') and ext_id:
-              try:
-                user = api_get(f"https://onesignal.com/api/v1/players/{player_id}?app_id={APP_ID}")
-                tags = user.get('tags', {})
-              except:
-                pass
 
             try:
               tasks = json.loads(tags.get('tasks', '[]'))
             except:
-              tasks = []
-
+              continue
             try:
               sent_keys = json.loads(tags.get('sent_notifs', '{}'))
             except:
               sent_keys = {}
 
             if not tasks:
-              print(f"Player {ext_id or player_id[:8]}: no tasks")
               continue
 
-            print(f"Player {ext_id or player_id[:8]}: {len(tasks)} tasks")
+            print(f"Player {player.get('external_user_id','?')}: {len(tasks)} tasks")
             updated_sent = dict(sent_keys)
 
             for task in tasks:
               if task.get('done') or not task.get('deadline'):
                 continue
               try:
-                # Parse deadline as Kyiv time (UTC+2)
                 dl_naive = datetime.fromisoformat(task['deadline'] + 'T' + (task.get('time') or '23:59'))
                 dl_kyiv = dl_naive.replace(tzinfo=KYIV)
                 dl_ms = dl_kyiv.timestamp() * 1000
@@ -115,26 +110,25 @@ jobs:
                 if not (r['min'] - 6 < diff_min <= r['min']):
                   continue
 
+                msg = (
+                  f"{r['emoji']} <b>«{task['title']}»</b>\n"
+                  f"До дедлайну залишилось <b>{r['label']}</b>\n"
+                  f"🕐 {task['deadline']} о {task.get('time','23:59')}\n"
+                  f"<a href='{SITE_URL}'>Відкрити TaskFlow</a>"
+                )
                 try:
-                  resp = api_post("https://onesignal.com/api/v1/notifications", {
-                    "app_id": APP_ID,
-                    "include_aliases": {"external_id": [ext_id]}, "target_channel": "push",
-                    "headings": {"en": f"{r['emoji']} «{task['title']}»"},
-                    "contents": {"en": f"До дедлайну залишилось {r['label']}"},
-                    "url": SITE_URL,
-                  })
-                  print(f"  ✅ {r['key']} → '{task['title']}' → {resp.get('id','')}")
+                  tg_send(msg)
+                  print(f"  ✅ TG {r['key']} → '{task['title']}'")
                   sent_count += 1
                   updated_sent[key] = True
                 except Exception as ex:
-                  print(f"  ❌ Push failed: {ex}")
+                  print(f"  ❌ TG failed: {ex}")
 
             if updated_sent != sent_keys:
               try:
-                api_post(
-                  f"https://onesignal.com/api/v1/players/{player_id}?app_id={APP_ID}",
-                  {"app_id": APP_ID, "tags": {"sent_notifs": json.dumps(updated_sent)}},
-                  method="PUT"
+                os_put(
+                  f"https://onesignal.com/api/v1/players/{player_id}?app_id={OS_APP}",
+                  {"app_id": OS_APP, "tags": {"sent_notifs": json.dumps(updated_sent)}}
                 )
                 print(f"  Tags updated")
               except Exception as ex:
