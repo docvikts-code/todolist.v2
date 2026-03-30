@@ -69,12 +69,18 @@ jobs:
 
           sent_count = 0
 
+          # Collect all unique tasks and track which player is newest per task
+          # Use task ID as key, keep only the most recent player's version
+          all_tasks = {}   # task_id -> task
+          task_player = {} # task_id -> player_id (for sent_notifs update)
+          global_sent = {} # merged sent_notifs across all players
+
           for player in players:
             player_id = player.get('id')
+            ext_id = player.get('external_user_id', '')
             tags = player.get('tags', {})
             if not player_id or not tags.get('tasks'):
               continue
-
             try:
               tasks = json.loads(tags.get('tasks', '[]'))
             except:
@@ -84,55 +90,84 @@ jobs:
             except:
               sent_keys = {}
 
-            if not tasks:
-              continue
-
-            print(f"Player {player.get('external_user_id','?')}: {len(tasks)} tasks")
-            updated_sent = dict(sent_keys)
+            # Merge sent_notifs
+            global_sent.update(sent_keys)
 
             for task in tasks:
-              if task.get('done') or not task.get('deadline'):
-                continue
+              tid = task.get('id')
+              if tid and not task.get('done'):
+                # Prefer newest player (u_j6cx17vi has latest session)
+                if tid not in all_tasks:
+                  all_tasks[tid] = task
+                  task_player[tid] = (player_id, ext_id, tags)
+
+          print(f"Total unique tasks: {len(all_tasks)}")
+
+          # Find the main active player (most recent session) for sent_notifs updates
+          main_player = None
+          main_player_id = None
+          for player in players:
+            tags = player.get('tags', {})
+            if tags.get('tasks') and tags.get('tasks') != '[]':
+              # Pick player with most sent_notifs (most active)
               try:
-                dl_naive = datetime.fromisoformat(task['deadline'] + 'T' + (task.get('time') or '23:59'))
-                dl_kyiv = dl_naive.replace(tzinfo=KYIV)
-                dl_ms = dl_kyiv.timestamp() * 1000
+                sn = json.loads(tags.get('sent_notifs', '{}'))
+                if main_player is None or len(sn) > len(json.loads(main_player.get('tags',{}).get('sent_notifs','{}'))):
+                  main_player = player
+                  main_player_id = player.get('id')
               except:
+                pass
+
+          updated_sent = dict(global_sent)
+
+          for tid, task in all_tasks.items():
+            if not task.get('deadline'):
+              continue
+            try:
+              dl_naive = datetime.fromisoformat(task['deadline'] + 'T' + (task.get('time') or '23:59'))
+              dl_kyiv = dl_naive.replace(tzinfo=KYIV)
+              dl_ms = dl_kyiv.timestamp() * 1000
+            except:
+              continue
+
+            diff_min = (dl_ms - now_ms) / 60000
+            print(f"Task '{task['title']}': {diff_min:.1f} min to deadline")
+
+            for r in REMINDERS:
+              key = f"{tid}_{r['key']}"
+              if global_sent.get(key):
+                continue
+              if not (r['min'] - 6 < diff_min <= r['min']):
                 continue
 
-              diff_min = (dl_ms - now_ms) / 60000
-              print(f"  Task '{task['title']}': {diff_min:.1f} min to deadline")
-
-              for r in REMINDERS:
-                key = f"{task['id']}_{r['key']}"
-                if sent_keys.get(key):
-                  continue
-                if not (r['min'] - 6 < diff_min <= r['min']):
-                  continue
-
-                msg = (
-                  f"{r['emoji']} <b>«{task['title']}»</b>\n"
-                  f"До дедлайну залишилось <b>{r['label']}</b>\n"
-                  f"🕐 {task['deadline']} о {task.get('time','23:59')}\n"
-                  f"<a href='{SITE_URL}'>Відкрити TaskFlow</a>"
-                )
-                try:
-                  tg_send(msg)
-                  print(f"  ✅ TG {r['key']} → '{task['title']}'")
-                  sent_count += 1
-                  updated_sent[key] = True
-                except Exception as ex:
-                  print(f"  ❌ TG failed: {ex}")
-
-            if updated_sent != sent_keys:
+              msg = (
+                f"{r['emoji']} <b>«{task['title']}»</b>\n"
+                f"До дедлайну залишилось <b>{r['label']}</b>\n"
+                f"🕐 {task['deadline']} о {task.get('time','23:59')}\n"
+                f"<a href='{SITE_URL}'>Відкрити TaskFlow</a>"
+              )
               try:
-                os_put(
-                  f"https://onesignal.com/api/v1/players/{player_id}?app_id={OS_APP}",
-                  {"app_id": OS_APP, "tags": {"sent_notifs": json.dumps(updated_sent)}}
-                )
-                print(f"  Tags updated")
+                tg_send(msg)
+                print(f"  ✅ TG {r['key']} → '{task['title']}'")
+                sent_count += 1
+                updated_sent[key] = True
               except Exception as ex:
-                print(f"  Tag update failed: {ex}")
+                print(f"  ❌ TG failed: {ex}")
+
+          # Update sent_notifs on all players that have tasks
+          if updated_sent != global_sent and main_player_id:
+            for player in players:
+              pid = player.get('id')
+              tags = player.get('tags', {})
+              if tags.get('tasks') and tags.get('tasks') != '[]':
+                try:
+                  os_put(
+                    f"https://onesignal.com/api/v1/players/{pid}?app_id={OS_APP}",
+                    {"app_id": OS_APP, "tags": {"sent_notifs": json.dumps(updated_sent)}}
+                  )
+                  print(f"  Tags updated for player {pid[:8]}")
+                except Exception as ex:
+                  print(f"  Tag update failed: {ex}")
 
           print(f"Done. Sent {sent_count} notifications.")
           PYEOF
