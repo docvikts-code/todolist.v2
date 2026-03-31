@@ -15,6 +15,8 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           ONESIGNAL_APP_ID: "9b0e3726-37de-4173-b378-cc446ca4fd73"
           ONESIGNAL_API_KEY: ${{ secrets.ONESIGNAL_API_KEY }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_REPO: "docvikts-code/todolist.v2"
         run: |
           python3 << 'PYEOF'
           import json, os, time, urllib.request, urllib.parse
@@ -24,6 +26,8 @@ jobs:
           TG_CHAT  = os.environ['TELEGRAM_CHAT_ID']
           OS_APP   = os.environ['ONESIGNAL_APP_ID']
           OS_KEY   = os.environ['ONESIGNAL_API_KEY']
+          GH_TOKEN = os.environ['GH_TOKEN']
+          GH_REPO  = os.environ['GH_REPO']
           KYIV     = timezone(timedelta(hours=2))
           SITE_URL = "https://storied-piroshki-5d1420.netlify.app"
 
@@ -34,22 +38,52 @@ jobs:
               'parse_mode': 'HTML'
             }).encode()
             req = urllib.request.Request(
-              f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-              data=data)
+              f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage", data=data)
             return json.loads(urllib.request.urlopen(req, timeout=10).read())
 
           def os_get(url):
             req = urllib.request.Request(url, headers={"Authorization": f"Key {OS_KEY}"})
             return json.loads(urllib.request.urlopen(req, timeout=10).read())
 
-          def os_put(url, data):
-            req = urllib.request.Request(url,
-              data=json.dumps(data).encode(),
-              headers={"Authorization": f"Key {OS_KEY}", "Content-Type": "application/json"},
-              method="PUT")
-            return json.loads(urllib.request.urlopen(req, timeout=10).read())
+          def gh_get_var(name):
+            url = f"https://api.github.com/repos/{GH_REPO}/actions/variables/{name}"
+            req = urllib.request.Request(url, headers={
+              "Authorization": f"Bearer {GH_TOKEN}",
+              "Accept": "application/vnd.github.v3+json"
+            })
+            try:
+              return json.loads(urllib.request.urlopen(req, timeout=10).read()).get('value', '{}')
+            except:
+              return '{}'
 
-          # Fetch players from OneSignal (for sent_notifs tracking)
+          def gh_set_var(name, value):
+            url = f"https://api.github.com/repos/{GH_REPO}/actions/variables/{name}"
+            data = json.dumps({"name": name, "value": value}).encode()
+            # Try PATCH first, then POST
+            for method in ["PATCH", "POST"]:
+              try:
+                req = urllib.request.Request(url, data=data, headers={
+                  "Authorization": f"Bearer {GH_TOKEN}",
+                  "Accept": "application/vnd.github.v3+json",
+                  "Content-Type": "application/json"
+                }, method=method)
+                urllib.request.urlopen(req, timeout=10)
+                return True
+              except Exception as e:
+                if method == "PATCH":
+                  continue
+                print(f"Failed to set var: {e}")
+            return False
+
+          # Load sent_notifs from GitHub Variables
+          print("Loading sent_notifs from GitHub Variables...")
+          try:
+            sent_keys = json.loads(gh_get_var("SENT_NOTIFS"))
+          except:
+            sent_keys = {}
+          print(f"Loaded {len(sent_keys)} sent keys")
+
+          # Fetch tasks from OneSignal
           try:
             result = os_get(f"https://onesignal.com/api/v1/players?app_id={OS_APP}&limit=200")
             players = result.get('players', [])
@@ -62,63 +96,30 @@ jobs:
           print(f"Current Kyiv time: {now_kyiv}")
 
           REMINDERS = [
-            {"min": 1440, "label": "24 години",  "emoji": "📅", "key": "24h"},
-            {"min": 60,   "label": "1 годину",   "emoji": "⏰", "key": "1h"},
-            {"min": 5,    "label": "5 хвилин",   "emoji": "🚨", "key": "5m"},
+            {"min": 1440, "label": "24 години", "emoji": "📅", "key": "24h"},
+            {"min": 60,   "label": "1 годину",  "emoji": "⏰", "key": "1h"},
+            {"min": 5,    "label": "5 хвилин",  "emoji": "🚨", "key": "5m"},
           ]
 
-          sent_count = 0
-
-          # Collect all unique tasks and track which player is newest per task
-          # Use task ID as key, keep only the most recent player's version
-          all_tasks = {}   # task_id -> task
-          task_player = {} # task_id -> player_id (for sent_notifs update)
-          global_sent = {} # merged sent_notifs across all players
-
+          # Collect unique tasks across all players
+          all_tasks = {}
           for player in players:
-            player_id = player.get('id')
-            ext_id = player.get('external_user_id', '')
             tags = player.get('tags', {})
-            if not player_id or not tags.get('tasks'):
+            if not tags.get('tasks'):
               continue
             try:
               tasks = json.loads(tags.get('tasks', '[]'))
-            except:
-              continue
-            try:
-              sent_keys = json.loads(tags.get('sent_notifs', '{}'))
-            except:
-              sent_keys = {}
-
-            # Merge sent_notifs
-            global_sent.update(sent_keys)
-
-            for task in tasks:
-              tid = task.get('id')
-              if tid and not task.get('done'):
-                # Prefer newest player (u_j6cx17vi has latest session)
-                if tid not in all_tasks:
+              for task in tasks:
+                tid = task.get('id')
+                if tid and not task.get('done') and tid not in all_tasks:
                   all_tasks[tid] = task
-                  task_player[tid] = (player_id, ext_id, tags)
+            except:
+              pass
 
           print(f"Total unique tasks: {len(all_tasks)}")
 
-          # Find the main active player (most recent session) for sent_notifs updates
-          main_player = None
-          main_player_id = None
-          for player in players:
-            tags = player.get('tags', {})
-            if tags.get('tasks') and tags.get('tasks') != '[]':
-              # Pick player with most sent_notifs (most active)
-              try:
-                sn = json.loads(tags.get('sent_notifs', '{}'))
-                if main_player is None or len(sn) > len(json.loads(main_player.get('tags',{}).get('sent_notifs','{}'))):
-                  main_player = player
-                  main_player_id = player.get('id')
-              except:
-                pass
-
-          updated_sent = dict(global_sent)
+          sent_count = 0
+          updated_sent = dict(sent_keys)
 
           for tid, task in all_tasks.items():
             if not task.get('deadline'):
@@ -135,7 +136,7 @@ jobs:
 
             for r in REMINDERS:
               key = f"{tid}_{r['key']}"
-              if global_sent.get(key):
+              if sent_keys.get(key):
                 continue
               if not (r['min'] - 6 < diff_min <= r['min']):
                 continue
@@ -148,26 +149,23 @@ jobs:
               )
               try:
                 tg_send(msg)
-                print(f"  ✅ TG {r['key']} → '{task['title']}'")
+                print(f"  ✅ {r['key']} → '{task['title']}'")
                 sent_count += 1
                 updated_sent[key] = True
               except Exception as ex:
                 print(f"  ❌ TG failed: {ex}")
 
-          # Update sent_notifs on all players that have tasks
-          if updated_sent != global_sent and main_player_id:
-            for player in players:
-              pid = player.get('id')
-              tags = player.get('tags', {})
-              if tags.get('tasks') and tags.get('tasks') != '[]':
-                try:
-                  os_put(
-                    f"https://onesignal.com/api/v1/players/{pid}?app_id={OS_APP}",
-                    {"app_id": OS_APP, "tags": {"sent_notifs": json.dumps(updated_sent)}}
-                  )
-                  print(f"  Tags updated for player {pid[:8]}")
-                except Exception as ex:
-                  print(f"  Tag update failed: {ex}")
+          # Clean up old sent_notifs (older than 7 days) to keep variable small
+          now_s = time.time()
+          cleaned = {k: v for k, v in updated_sent.items()
+                     if abs(now_s - int(k.split('_')[0])/1000) < 7*86400}
+
+          # Save back to GitHub Variables
+          if cleaned != sent_keys:
+            if gh_set_var("SENT_NOTIFS", json.dumps(cleaned)):
+              print(f"Saved {len(cleaned)} sent keys to GitHub Variables")
+            else:
+              print("Failed to save sent_notifs")
 
           print(f"Done. Sent {sent_count} notifications.")
           PYEOF
